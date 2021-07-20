@@ -12,20 +12,18 @@ import torchvision.transforms.functional as trnF
 import torchvision.datasets as dset
 from torchvision.utils import save_image
 import torch.nn.functional as F
-import torchvision.models as models
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import cv2 as cv
-from folder import ImageFolderCustom, display_img
 from model.resnet import resnet18
-from utils.utils import *
+from utils import *
 
 parser = argparse.ArgumentParser(description = "Train one-class model - ImageNet",
 	formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--in_class', '-in', type=int, default=0, help='Class to have as the target/in distribution.')
-parser.add_argument("--transform", "-trf", type = str, default = "cutout", help = "Transformation that applied to the raw input data")
+parser.add_argument("--transform", "-trf", type = str, default = "trans+rot", help = "Transformation that applied to the raw input data")
 #Optimization options
-parser.add_argument('--batch_size', '-b', type=int, default=64, help='Batch size.')
+parser.add_argument('--batch_size', '-b', type=int, default=32, help='Batch size.')
 parser.add_argument('--epochs', '-e', type=int, default=20, help='Number of epochs to train.')
 parser.add_argument('--learning_rate', '-lr', type=float, default=0.1, help='The initial learning rate.')
 parser.add_argument('--momentum', type=float, default=0.9, help='Momentum.')
@@ -39,7 +37,7 @@ args = parser.parse_args()
 
 state = {k:v for k,v in args._get_kwargs()}
 print(state)
-
+'''
 def train(model, train_loader, optimizer):
 	model.train()
 
@@ -60,47 +58,49 @@ def train(model, train_loader, optimizer):
 		optimizer.zero_grad()
 
 		#forward
-		logits = model(batch)
+		logits, _ = model(batch)
 
 		#loss
 		loss = F.cross_entropy(logits, batch_target.cuda())
 
 		loss.backward()
 		optimizer.step()
+'''
 
-to_np = lambda x: x.data.cpu().numpy()
+def train(model, train_loader, optimizer):
+	model.train()
 
-def test(model, test_loader_in, test_loader_out):
-	model.eval()
-	result_in_avg = []
-	result_out_avg = []
-	with torch.no_grad():
-		for i, (data_in, data_out) in enumerate(zip(test_loader_in, test_loader_out)):
-			batch_size_in = data_in[0].shape[0]
-			batch_size_out = data_out[0].shape[0]
-			#sanity check
-			#assert data_in[0].shape[0] == data_in[1].shape[0]
-			
-			#forward
-			def concatenate_tensor(x,y):
-				tensor = np.concatenate((x,y), 0)
-				return torch.FloatTensor(tensor).cuda()
+	for x, x_rot, x_trans in tqdm(train_loader):
+		x = x.view(-1,3,224,224)
+		x_rot = x_rot.view(-1,3,224,224)
+		x_trans = x_trans.view(-1,3,224,224)
 
-			data_in_x, data_in_Tx = data_in
-			batch_in = concatenate_tensor(data_in_x, data_in_Tx)
-			softmax_in = to_np(F.softmax(model(batch_in), 1))
-			assert softmax_in.ndim == 2
-			result_in = softmax_in[:batch_size_in,0] + softmax_in[batch_size_in:,1]
-			result_in_avg.append(result_in)
+		#sanity check
+		assert x.shape[0] == x_rot.shape[0]
 
-			data_out_x, data_out_Tx = data_out
-			batch_out = concatenate_tensor(data_out_x, data_out_Tx)
-			softmax_out = to_np(F.softmax(model(batch_out), 1))
-			assert softmax_out.ndim == 2
-			result_out = softmax_out[:batch_size_out,0] + softmax_out[batch_size_out:,1]
-			result_out_avg.append(result_out)
-	
-	return result_in_avg, result_out_avg
+		batch_size = x.shape[0]
+		batch = np.concatenate((x, x_rot, x_trans))
+		batch = torch.FloatTensor(batch).cuda()
+
+		batch_target_rot = torch.cat((torch.zeros(batch_size),
+			torch.ones(batch_size)),0).long()
+		batch_target_trans = torch.cat((torch.zeros(batch_size),
+			torch.ones(batch_size)),0).long()
+
+		optimizer.zero_grad()
+
+		#forward
+		logits, pen = model(batch)
+		logit_rot = model.fc(pen[:2*batch_size])
+		logit_trans = model.fc_1(torch.cat((pen[:batch_size], pen[2*batch_size:]), 0))
+
+		#loss
+		loss_rot = F.cross_entropy(logit_rot, batch_target_rot.cuda())
+		loss_trans = F.cross_entropy(logit_trans, batch_target_trans.cuda())
+		loss = loss_rot + loss_trans
+
+		loss.backward()
+		optimizer.step()
 
 def main():
 	"""
@@ -133,9 +133,9 @@ def main():
 	model = resnet18(pretrained = False)
 	num_features = model.fc.in_features
 	#replace the fc layer of resnet18 by fc layer with suitable output
-	#model.fc = nn.Linear(num_features, 2)
-	#model.fc_1 = nn.Linear(num_features, 2)
 	model.fc = nn.Linear(num_features, 2)
+	model.fc_1 = nn.Linear(num_features, 2)
+	#model.fc = nn.Linear(num_features, 2)
 
 	#get the gpu ready
 	model.cuda()
@@ -177,8 +177,6 @@ def main():
 
 		#run the train function
 		train(model, train_loader, optimizer)
-		#if epoch%5 == 3:
-		#	print(test(model, test_loader_in, test_loader_out))
 
 		#save model
 		torch.save(model.state_dict(), os.path.join(

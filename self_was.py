@@ -16,12 +16,13 @@ import torchvision.models as models
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import cv2 as cv
-from opencv import *
+from utilization.opencv import *
+from utils import prepared_dataset
 
 parser = argparse.ArgumentParser(description = "Wasserstein between 2 distribution - ImageNet",
 	formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--in_class', '-in', type=int, default=0, help='Class to have as the target/in distribution.')
-parser.add_argument("--transform", "-trf", type = str, default = "cutout", help = "Transformation that applied to the raw input data")
+parser.add_argument("--transform", "-trf", type = str, default = "translation", help = "Transformation that applied to the raw input data")
 #Optimization options
 parser.add_argument('--batch_size', '-b', type=int, default=128, help='Batch size.')
 parser.add_argument('--epochs', '-e', type=int, default=10, help='Number of epochs to train.')
@@ -44,45 +45,6 @@ classes = ['acorn', 'airliner', 'ambulance', 'american_alligator', 'banjo', 'bar
            'dragonfly', 'dumbbell', 'forklift', 'goblet', 'grand_piano', 'hotdog', 'hourglass', 'manhole_cover',
            'mosque', 'nail', 'parking_meter', 'pillow', 'revolver', 'rotary_dial_telephone', 'schooner', 'snowmobile',
            'soccer_ball', 'stingray', 'strawberry', 'tank', 'toaster', 'volcano']
-
-class prepared_dataset(torch.utils.data.Dataset):
-	def __init__(self, dataset, in_class, transform):
-		self.dataset = dataset
-		self.in_class = in_class
-		self.transform = transform
-		self.num_pts = len(self.dataset)
-		#print("length of dataset", self.num_pts)
-
-	def __getitem__(self, index):
-		x_origin, target = self.dataset[index]
-
-		if self.transform == "rot90":
-			x_origin = np.copy(x_origin)
-			x_transform = np.rot90(x_origin.copy(), k = 1, axes = (1,2)).copy()
-
-		if self.transform == "translation":
-			x_origin = np.copy(x_origin)
-			x_transform = affine(np.asarray(np.transpose(x_origin, (1,2,0))).copy(), 0, (112, 0),\
-			 1, 0, interpolation=cv.INTER_CUBIC, mode=cv.BORDER_REFLECT_101)
-			x_transform = np.transpose(x_transform, (2,0,1)).copy()
-
-		if self.transform == "cutout":
-			x_origin = np.copy(x_origin)
-			x_transform = cutout(26)(np.transpose(x_origin, (1,2,0)))
-			plt.imshow(x_transform)
-			plt.show()
-			x_transform = np.transpose(x_transform, (2,0,1)).copy()
-
-		if self.transform == "permute":
-			x_origin = np.copy(x_origin)
-			x_transform = permute()(np.transpose(x_origin, (1,2,0)))
-			plt.show()
-			x_transform = np.transpose(x_transform, (2,0,1)).copy()
-
-		return torch.FloatTensor(x_origin), torch.FloatTensor(x_transform)
-
-	def __len__(self):
-		return self.num_pts
 
 def train(model, train_loader, optimizer):
 	model.train()
